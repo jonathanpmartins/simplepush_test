@@ -6,6 +6,9 @@ import httplib
 import urlparse
 import pprint
 import sys
+import time
+import uuid
+
 
 from pushtest.utils import read_config
 
@@ -23,7 +26,7 @@ def on_close(ws):
 
 
 def on_error(ws, error):
-    print "## Error:: " + error
+    print "## Error:: %s " % error
     exit()
 
 
@@ -35,6 +38,7 @@ def on_message(ws, message):
     msg = json.loads(message)
     print "<<< " + pprint.pformat(msg)
     type = msg.get("messageType")
+    version=str(time.time())
     if type is None:
         exit("Unknown message type sent")
     if msg.get("status") is not None:
@@ -68,7 +72,10 @@ def on_message(ws, message):
         ## NOTE: Normally, channelIDs are UUID4 type values.
         check_hello(msg)
         ws.state = "register"
-        ws.send(json.dumps({"messageType": ws.state, "channelID": ws.chid}))
+        dmp = json.dumps({"messageType": ws.state,
+            "channelID": ws.chid})
+        print ("Registering ", dmp)
+        ws.send(dmp)
         return
     if ws.state == "register":
         ## Endpoint is registered. Send an update via the REST interface.
@@ -76,7 +83,7 @@ def on_message(ws, message):
         ws.update_url = msg.get("pushEndpoint")
         ## Look for an Update.
         ws.state = "update"
-        send_rest_alert(ws)
+        send_rest_alert(ws, version)
         return
     if ws.state == "shutdown":
         print "### SUCCESS!!! Exiting..."
@@ -123,8 +130,14 @@ def state_machine(ws):
     # do successful
     ws.state = "hello"
     print ">>> Sending 'Hello'"
-    ws.send(json.dumps({"messageType": ws.state,
-            "uaid": uaid, "channelIDs": []}))
+    chanIds = []
+    for i in range(1, 50):
+        chanIds.append(str(uuid.uuid4()))
+    dmp = json.dumps(
+        {"messageType": ws.state,
+         "uaid": uaid, "channelIDs": chanIds})
+    print "Send size %d" % len(dmp)
+    ws.send(dmp)
 
 
 def check_hello(msg):
@@ -157,16 +170,21 @@ def check_register(msg):
     return
 
 
-def send_rest_alert(ws):
+def send_rest_alert(ws, version):
     print ">>> Sending REST update"
     url = urlparse.urlparse(ws.update_url)
     http = None
     if url.scheme == "https":
         http = httplib.HTTPSConnection(url.netloc)
     else:
-    http = httplib.HTTPConnection(url.netloc)
+        http = httplib.HTTPConnection(url.netloc)
     http.set_debuglevel(10)
-    http.request("PUT", url.path, "version=" + version)
+    print ws.update_url + "?version=" + version
+    http.request(
+        "POST", url.path, "version=" + version,
+        {'Content-Type': 'application/octet',
+         'Encryption-Key': 'somekey',
+         'Encryption': 'encryption'})
     print "#>> "
     resp = http.getresponse()
     if resp.status != 200:
